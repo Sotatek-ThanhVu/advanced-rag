@@ -1,160 +1,86 @@
 import os
-from typing import List
+from typing import Any, List, Tuple
 
 from dotenv import load_dotenv
-from llama_index import (Document, ServiceContext, SimpleDirectoryReader,
-                         StorageContext, VectorStoreIndex)
+from llama_index import (OpenAIEmbedding, ServiceContext, StorageContext,
+                         load_index_from_storage)
 from llama_index.callbacks import CallbackManager, LlamaDebugHandler
-from llama_index.embeddings import GeminiEmbedding, OpenAIEmbedding
-from llama_index.indices.query.query_transform.base import \
-    StepDecomposeQueryTransform
+from llama_index.embeddings import GeminiEmbedding
 from llama_index.llms import Gemini, OpenAI
-from llama_index.node_parser import HierarchicalNodeParser, get_leaf_nodes
-from llama_index.query_engine import (MultiStepQueryEngine,
-                                      RetrieverQueryEngine,
-                                      SubQuestionQueryEngine,
-                                      retriever_query_engine)
-from llama_index.readers.database import DatabaseReader
+from llama_index.llms.utils import LLMType
+from llama_index.query_engine import RetrieverQueryEngine
+from llama_index.response_synthesizers import ResponseMode
 from llama_index.retrievers.auto_merging_retriever import AutoMergingRetriever
-from llama_index.schema import BaseNode
-from llama_index.storage.docstore import SimpleDocumentStore
-from llama_index.tools.query_engine import QueryEngineTool
-from llama_index.tools.types import ToolMetadata
+from llama_index.schema import NodeWithScore
 
 load_dotenv()
+# logging.basicConfig(stream=sys.stdout, level=logging.INFO)
+# logging.getLogger().addHandler(logging.StreamHandler(stream=sys.stdout))
 
 
-def load_documents() -> List[Document]:
-    # Using Database
-    loader = DatabaseReader(uri=connection_string)
-    documents = loader.load_data(query=query)  # INFO: Ignore this
-
-    # Using directory
-    # loader = SimpleDirectoryReader(input_files=["./documents/_event__202401101443.csv"])
-    # documents = loader.load_data(show_progress=True)
-
-    documents = Document(text="\n\n".join([doc.get_content() for doc in documents]))
-    return [documents]
+def display_nodes(nodes: List[NodeWithScore]):
+    for node in nodes:
+        print("\n" + "-" * 50 + "\n")
+        print("Node ID:", node.id_)
+        print("Node score:", node.score)
+        print("Node content:", node.text)
+        print("\n" + "-" * 50 + "\n")
 
 
-def build_nodes(documents: List[Document]) -> List[BaseNode]:
+def build_context(
+    llm: LLMType | None,
+    embed_model: Any | None,
+    callback_manager: CallbackManager | None,
+    persist_dir: str = "storage",
+) -> Tuple[ServiceContext, StorageContext]:
     """
-    Take a list of documents and chunk them into `Node` objects, such that
-    each node is a specific chunk of parent document.
+    Construct ServiceContext and StorageContext
     """
 
-    # node_parser = SentenceSplitter(chunk_size=1024, chunk_overlap=20)
-    # node_parser = TokenTextSplitter(chunk_size=512, chunk_overlap=10, separator="\n\n")
-    # node_parser = JSONNodeParser()
-    node_parser = HierarchicalNodeParser.from_defaults(
-        chunk_sizes=[1024, 512, 256, 128]
-    )
-
-    nodes = node_parser.get_nodes_from_documents(
-        documents=documents, show_progress=True
-    )
-    return nodes
-
-
-def build_storage_context(nodes: List[BaseNode]) -> StorageContext:
-    # contain ingested document chunks (Node)
-    docstore = SimpleDocumentStore()
-    docstore.add_documents(nodes)
-    docstore.persist("./storage/docstore.json")
-    # docstore = SimpleDocumentStore.from_persist_dir("./storage")
-
-    storage_context = StorageContext.from_defaults(docstore=docstore)
-    return storage_context
-
-
-def build_service_context() -> ServiceContext:
     service_context = ServiceContext.from_defaults(
-        llm=llm,
-        embed_model=embed_model,
-        callback_manager=callback_manager,
+        llm=llm, embed_model=embed_model, callback_manager=callback_manager
     )
-    return service_context
+
+    storage_context = StorageContext.from_defaults(persist_dir=persist_dir)
+
+    return service_context, storage_context
 
 
-def build_index(
-    nodes: List[BaseNode],
-    service_context: ServiceContext,
-    storage_context: StorageContext,
-) -> VectorStoreIndex:
-    # index = (
-    #     VectorStoreIndex.from_vector_store(vector_store=vector_store)
-    #     if is_exist
-    #     else VectorStoreIndex(
-    #         nodes=leaf_nodes,
-    #         service_context=service_context,
-    #         storage_context=storage_context,
-    #         show_progress=True,
-    #     )
-    # )
-    index = VectorStoreIndex(
-        nodes=nodes,
-        service_context=service_context,
-        storage_context=storage_context,
-        show_progress=True,
-    )
-    return index
+def main() -> None:
+    service_context, storage_context = build_context(llm, embed_model, callback_manager)
 
+    index = load_index_from_storage(storage_context, service_context=service_context)
+    base_retriever = index.as_retriever(similarity_top_k=10)
 
-def build_retriever(
-    index: VectorStoreIndex,
-    storage_context: StorageContext,
-):
-    base_retriever = index.as_retriever(similarity_top_k=6)
     retriever = AutoMergingRetriever(
-        vector_retriever=base_retriever,  # INFO: Ignore this
+        base_retriever,
         storage_context=storage_context,
         verbose=True,
         callback_manager=callback_manager,
     )
-    return retriever
 
-
-def main() -> None:
-    documents = load_documents()
-    nodes = build_nodes(documents)
-    leaf_nodes = get_leaf_nodes(nodes)
-
-    storage_context = build_storage_context(nodes)
-    service_context = build_service_context()
-
-    index = build_index(
-        nodes=leaf_nodes,
-        service_context=service_context,
-        storage_context=storage_context,
+    query_engine = RetrieverQueryEngine.from_args(
+        retriever=retriever,
+        # response_mode=ResponseMode.NO_TEXT,
+        streaming=True,
     )
 
-    retriever = build_retriever(index=index, storage_context=storage_context)
-    query_engine = RetrieverQueryEngine.from_args(retriever=retriever)
-
-    # query_engine = MultiStepQueryEngine(
-    #     query_engine=query_engine,
-    #     query_transform=StepDecomposeQueryTransform(llm=llm, verbose=True),
-    # )
-    response = query_engine.query(query_str)
-    print(response)
+    response = query_engine.query(query)
+    # display_nodes(response.source_nodes)
+    response.print_response_stream()
 
 
 if __name__ == "__main__":
     connection_string = os.getenv("CONNECTION_STRING")
-    query = os.getenv("QUERY")
+    database_query = os.getenv("QUERY")
 
-    llm = Gemini(model_name="models/gemini-pro", temperature=0.1)
-    # llm = OpenAI(model="gpt-3.5-turbo-1106", temperature=0.2)
-    # embed_model = GeminiEmbedding()
-    embed_model = OpenAIEmbedding()
+    # llm = OpenAI(model="gpt-3.5-turbo-1106", temperature=0.0, max_tokens=250)
+    # embed_model = OpenAIEmbedding(mode=OpenAIEmbeddingMode.SIMILARITY_MODE)
+    llm = Gemini(temperature=0.0, max_tokens=512)
+    embed_model = GeminiEmbedding()
+    callback_manager = CallbackManager([LlamaDebugHandler(print_trace_on_end=True)])
 
-    callback_manager = CallbackManager(
-        [
-            LlamaDebugHandler(print_trace_on_end=True),
-        ]
-    )
-
-    query_str = "Give me all events in Hawaii"
-    # query_str = "Give me all events which held in Hawaii. Return event id array only."
+    # query = "Give me all events id taking place in Hawaii. No description."
+    query = "What events are held in Hawaii? Return in array of id only."
 
     main()
