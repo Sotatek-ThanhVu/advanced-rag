@@ -3,14 +3,14 @@ from typing import Any, List, Tuple
 
 from dotenv import load_dotenv
 from llama_index import (OpenAIEmbedding, ServiceContext, StorageContext,
-                         load_index_from_storage)
+                         get_response_synthesizer, load_index_from_storage)
 from llama_index.callbacks import CallbackManager, LlamaDebugHandler
 from llama_index.embeddings import GeminiEmbedding
 from llama_index.llms import Gemini, OpenAI
 from llama_index.llms.utils import LLMType
 from llama_index.query_engine import RetrieverQueryEngine
 from llama_index.response_synthesizers import ResponseMode
-from llama_index.retrievers.auto_merging_retriever import AutoMergingRetriever
+from llama_index.retrievers import AutoMergingRetriever
 from llama_index.schema import NodeWithScore
 
 load_dotenv()
@@ -61,12 +61,18 @@ def main() -> None:
 
     query_engine = RetrieverQueryEngine.from_args(
         retriever=retriever,
+        response_synthesizer=get_response_synthesizer(
+            service_context=service_context,
+            callback_manager=callback_manager,
+            streaming=True,
+            verbose=True,
+        ),
         # response_mode=ResponseMode.NO_TEXT,
         streaming=True,
     )
 
     response = query_engine.query(query)
-    # display_nodes(response.source_nodes)
+    # print(response.get_formatted_sources())
     response.print_response_stream()
 
 
@@ -74,9 +80,9 @@ if __name__ == "__main__":
     connection_string = os.getenv("CONNECTION_STRING")
     database_query = os.getenv("QUERY")
 
-    # llm = OpenAI(model="gpt-3.5-turbo-1106", temperature=0.0, max_tokens=250)
+    llm = OpenAI(model="gpt-3.5-turbo-1106", temperature=0.0, max_tokens=250)
     # embed_model = OpenAIEmbedding(mode=OpenAIEmbeddingMode.SIMILARITY_MODE)
-    llm = Gemini(temperature=0.0, max_tokens=512)
+    # llm = Gemini(temperature=0.0, max_tokens=512)
     embed_model = GeminiEmbedding()
     callback_manager = CallbackManager([LlamaDebugHandler(print_trace_on_end=True)])
 
