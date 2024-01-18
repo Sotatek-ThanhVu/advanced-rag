@@ -5,16 +5,16 @@ from dotenv import load_dotenv
 from llama_index import (PromptTemplate, QueryBundle, ServiceContext,
                          VectorStoreIndex, set_global_service_context)
 from llama_index.callbacks import CallbackManager, LlamaDebugHandler
+from llama_index.chat_engine import CondensePlusContextChatEngine
 from llama_index.embeddings import GeminiEmbedding
 from llama_index.llms import LLM, OpenAI
+from llama_index.memory import ChatMemoryBuffer
 from llama_index.postprocessor import (PrevNextNodePostprocessor,
                                        SimilarityPostprocessor)
 from llama_index.postprocessor.types import BaseNodePostprocessor
-from llama_index.query_engine.retriever_query_engine import \
-    RetrieverQueryEngine
-from llama_index.response_synthesizers import ResponseMode
 from llama_index.retrievers import BaseRetriever, RecursiveRetriever
 from llama_index.schema import NodeWithScore
+from llama_index.storage.chat_store import SimpleChatStore
 from llama_index.vector_stores.postgres import PGVectorStore
 from sqlalchemy import make_url
 
@@ -45,7 +45,7 @@ def create_retrievers(
     recursive_retriever = RecursiveRetriever(
         "vector",
         retriever_dict={"vector": retriever},
-        verbose=True,
+        # verbose=True,
     )
 
     # TODO: Add more retrievers if needed
@@ -153,16 +153,38 @@ def main() -> None:
         callback_manager=callback_manager,
     )
 
-    query_engine = RetrieverQueryEngine.from_args(
-        retriever=fusion_retriever,
-        response_mode=ResponseMode.NO_TEXT,
+    chat_store = SimpleChatStore()
+    memory = ChatMemoryBuffer.from_defaults(
+        # token_limit=3000,
+        chat_store=chat_store,
+        chat_store_key="user-1",
     )
 
-    response = query_engine.query(query)
-    for node in response.source_nodes:
-        print(node.score)
-        print(node.get_content()[:50])
-        print()
+    # system_prompt = PromptTemplate("")
+
+    # context_prompt = PromptTemplate("")
+
+    # condense_prompt = PromptTemplate("")
+
+    chat_engine = CondensePlusContextChatEngine.from_defaults(
+        retriever=fusion_retriever,
+        memory=memory,
+        # system_prompt=system_prompt,
+        # context_prompt=context_prompt,
+        # condense_prompt=condense_prompt,
+        verbose=True,
+    )
+
+    while True:
+        query = input("YOU: ")
+        if "end" == query.lower():
+            break
+
+        print("GPT:")
+        response = chat_engine.chat(query)
+        print(response)
+
+        chat_store.persist(persist_path="chat-history/chat-store.json")
 
 
 if __name__ == "__main__":
@@ -192,7 +214,5 @@ if __name__ == "__main__":
     Query: {query}
     Queries:
     """
-    similarity_cutoff = 0.75
 
-    query = "Hawaii conferences."
     main()

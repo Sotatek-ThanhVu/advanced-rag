@@ -84,6 +84,7 @@ if __name__ == "__main__":
     # embed_model = OpenAIEmbedding(mode=OpenAIEmbeddingMode.SIMILARITY_MODE)
     # llm = Gemini(temperature=0.0, max_tokens=512)
     embed_model = GeminiEmbedding()
+    embed_model = "local"
     callback_manager = CallbackManager([LlamaDebugHandler(print_trace_on_end=True)])
 
     # query = "Give me all events id taking place in Hawaii. No description."
